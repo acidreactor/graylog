@@ -1,0 +1,102 @@
+name: lab4-vm2-graylog
+
+services:
+  mongodb:
+    image: mongo:${MONGODB_VERSION}
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    networks: [lab4-net]
+
+  opensearch:
+    image: opensearchproject/opensearch:${OPENSEARCH_VERSION}
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+      - DISABLE_SECURITY_PLUGIN=true
+      - OPENSEARCH_JAVA_OPTS=${OPENSEARCH_HEAP:--Xms1g -Xmx1g}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+    volumes:
+      - os_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s http://localhost:9200/_cluster/health | grep -vq '\"status\":\"red\"'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    networks: [lab4-net]
+
+  graylog:
+    image: graylog/graylog:${GRAYLOG_VERSION}
+    restart: unless-stopped
+    environment:
+      GRAYLOG_PASSWORD_SECRET: ${GRAYLOG_PASSWORD_SECRET}
+      GRAYLOG_ROOT_PASSWORD_SHA2: ${GRAYLOG_ROOT_PASSWORD_SHA2}
+      GRAYLOG_HTTP_BIND_ADDRESS: 0.0.0.0:9000
+      GRAYLOG_HTTP_EXTERNAL_URI: ${GRAYLOG_EXTERNAL_URI}
+      GRAYLOG_ELASTICSEARCH_HOSTS: http://opensearch:9200
+      GRAYLOG_MONGODB_URI: mongodb://mongodb:27017/graylog
+      GRAYLOG_SKIP_PREFLIGHT_CHECKS: "true"
+      GRAYLOG_ROOT_TIMEZONE: Europe/Moscow
+      GRAYLOG_SERVER_JAVA_OPTS: ${GRAYLOG_HEAP:--Xms1g -Xmx1g}
+    ports:
+      - "9000:9000"   # веб-интерфейс и REST API (Sidecar подключается сюда)
+      - "5044:5044"   # Beats input (сюда Filebeat отправляет логи)
+    depends_on:
+      mongodb:
+        condition: service_started
+      opensearch:
+        condition: service_healthy
+    networks:
+      lab4-net:
+        aliases: [graylog]
+
+  # Одноразовая настройка Graylog через REST API:
+  # Beats input, три стрима (nginx, php-fpm, mysql) и токен для Sidecar
+  provision:
+    image: python:3.12-alpine
+    entrypoint: ["python", "-u", "/scripts/provision.py"]
+    environment:
+      GRAYLOG_API: http://graylog:9000/api
+      GRAYLOG_USER: admin
+      GRAYLOG_PASSWORD: ${GRAYLOG_ADMIN_PASSWORD}
+      HTTP_PROXY: ""
+      HTTPS_PROXY: ""
+      http_proxy: ""
+      https_proxy: ""
+      NO_PROXY: "graylog,localhost,127.0.0.1"
+      no_proxy: "graylog,localhost,127.0.0.1"
+    volumes:
+      - ./scripts/provision.py:/scripts/provision.py:ro
+    depends_on:
+      - graylog
+    networks: [lab4-net]
+
+  # Data Prepper читает индексы Graylog из OpenSearch и копирует документы в отдельный индекс
+  data-prepper:
+    image: opensearchproject/data-prepper:${DATAPREPPER_VERSION}
+    restart: unless-stopped
+    volumes:
+      - ./data-prepper/pipelines.yaml:/usr/share/data-prepper/pipelines/pipelines.yaml:ro
+      - ./data-prepper/data-prepper-config.yaml:/usr/share/data-prepper/config/data-prepper-config.yaml:ro
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    networks: [lab4-net]
+
+volumes:
+  mongo_data:
+  os_data:
+
+networks:
+  lab4-net:
+    external: true
+    name: lab4-net

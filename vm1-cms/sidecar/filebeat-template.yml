@@ -1,0 +1,72 @@
+# Шаблон конфигурации Filebeat для Graylog Sidecar.
+# Вставляется в веб-интерфейсе Graylog: System -> Sidecars -> Configuration -> Create Configuration
+# (коллектор filebeat, Linux). Sidecar сам подставляет значения ${sidecar.*} и запускает Filebeat.
+
+# обязательные поля для Graylog: по ним сообщение привязывается к Sidecar
+fields_under_root: true
+fields.collector_node_id: ${sidecar.nodeName}
+fields.gl2_source_collector: ${sidecar.nodeId}
+
+filebeat.inputs:
+  # у каждого источника своё поле service: по нему сообщения делятся на стримы
+  - type: log
+    paths:
+      - /var/log/lab-nginx/access.log
+    fields:
+      service: nginx
+      log_type: access
+    fields_under_root: true
+
+  - type: log
+    paths:
+      - /var/log/lab-nginx/error.log
+    fields:
+      service: nginx
+      log_type: error
+    fields_under_root: true
+
+  - type: log
+    paths:
+      - /var/log/php-fpm/access.log
+    fields:
+      service: php-fpm
+      log_type: access
+    fields_under_root: true
+
+  - type: log
+    paths:
+      - /var/log/php-fpm/error.log
+    fields:
+      service: php-fpm
+      log_type: error
+    fields_under_root: true
+
+  - type: log
+    paths:
+      - /var/log/mysql/error.log
+    fields:
+      service: mysql
+      log_type: error
+    fields_under_root: true
+
+  # slow log MySQL - многострочные записи, начало каждой: "# Time:"
+  - type: log
+    paths:
+      - /var/log/mysql/slow.log
+    multiline.pattern: "^# Time:"
+    multiline.negate: true
+    multiline.match: after
+    fields:
+      service: mysql
+      log_type: slowlog
+    fields_under_root: true
+
+# отправка в Beats input Graylog (порт 5044).
+# В общей docker-сети lab4-net имя graylog, на отдельных ВМ - IP второй ВМ.
+output.logstash:
+  hosts: ["graylog:5044"]
+  prefix: ""
+
+path:
+  data: /var/lib/graylog-sidecar/collectors/filebeat/data
+  logs: /var/lib/graylog-sidecar/collectors/filebeat/log

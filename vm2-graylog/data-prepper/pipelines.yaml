@@ -1,0 +1,31 @@
+# Data Prepper читает индексы Graylog (graylog_N) из OpenSearch и копирует документы
+# в отдельный индекс lab-graylog-copy. Graylog при этом не затрагивается.
+graylog-copy-pipeline:
+  source:
+    opensearch:
+      hosts: ["http://opensearch:9200"]
+      disable_authentication: true
+      indices:
+        include:
+          - index_name_regex: "graylog_[0-9]+"
+      scheduling:
+        # индексы перечитываются раз в минуту, новые сообщения попадают в копию
+        interval: "PT1M"
+        index_read_count: 100000
+      search_options:
+        search_context_type: "point_in_time"
+        batch_size: 500
+
+  processor:
+    - add_entries:
+        entries:
+          - key: "copied_by"
+            value: "data-prepper"
+            overwrite_if_key_exists: true
+
+  sink:
+    - opensearch:
+        hosts: ["http://opensearch:9200"]
+        index: "lab-graylog-copy"
+        # идентификатор документа берётся из источника: повторное чтение не создаёт дубликатов
+        document_id: "${getMetadata(\"opensearch-document_id\")}"
